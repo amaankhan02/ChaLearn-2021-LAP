@@ -122,7 +122,7 @@ class ColorJitter(object):
 
     def __call__(self, img):
         if isinstance(img, np.ndarray):
-            img = PIL.Image.fromarray(img)
+            img = PIL.Image.fromarray(img) # convert numpy image to PIL image
         img = torchvision.transforms.functional.adjust_brightness(img, self.brightness_factor)
         img = torchvision.transforms.functional.adjust_contrast(img, self.contrast_factor)
         img = torchvision.transforms.functional.adjust_saturation(img, self.saturation_factor)

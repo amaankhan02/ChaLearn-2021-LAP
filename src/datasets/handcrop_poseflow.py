@@ -10,8 +10,10 @@ import torchvision
 from torch.utils.data import DataLoader, Dataset
 
 from .common import collect_samples
-from .transforms import Compose, Scale, MultiScaleCrop, ToFloatTensor, PermuteImage, Normalize, scales, NORM_STD_IMGNET, \
-    NORM_MEAN_IMGNET, CenterCrop, IMAGE_SIZE, DeleteFlowKeypoints, ColorJitter, RandomHorizontalFlip
+from .transforms import (IMAGE_SIZE, NORM_MEAN_IMGNET, NORM_STD_IMGNET,
+                         CenterCrop, ColorJitter, Compose, DeleteFlowKeypoints,
+                         MultiScaleCrop, Normalize, PermuteImage,
+                         RandomHorizontalFlip, Scale, ToFloatTensor, scales)
 
 _DATA_DIR_LOCAL = '/project/data/chalearn21/data/mp4'
 
@@ -95,31 +97,46 @@ class ChaLearnDataset(Dataset):
     def __getitem__(self, item):
         self.transform.randomize_parameters()
 
-        sample = self.samples[item]
+        sample = self.samples[item] # self.samples = list of dicts
+        ''' sample = 
+                {
+                    'path' : video_file_path
+                    'label' : gloss
+                    'frames' : list of frame indices (to choose from the video opened from path)
+                }
+        '''
+        # open video from path into frames
         frames, _, _ = torchvision.io.read_video(os.path.join(self.root_path, self.job_path, sample['path']),
                                                  pts_unit='sec')
 
         clip = []
         poseflow_clip = []
         missing_wrists_left, missing_wrists_right = [], []
-        for frame_index in sample['frames']:
+
+        # iterate through frame indices that we have to look at
+        for frame_index in sample['frames']: 
+            # keypoint path
             kp_path = os.path.join(self.root_path.replace('mp4', 'kp'), self.job_path,
                                    sample['path'].replace('mp4', 'kp'), '{}_{:012d}_keypoints.json'.format(
                     sample['path'].split('/')[-1].replace('.mp4', ''), frame_index))
 
+            # open keypoint file as reading state
             with open(kp_path, 'r') as keypoints_file:
                 value = json.loads(keypoints_file.read())
                 keypoints = np.array(value['people'][0]['pose_keypoints_2d'])
+                # TODO: IDU the double colons in the indexing
                 x = keypoints[0::3]
                 y = keypoints[1::3]
-                keypoints = np.stack((x, y), axis=0)
-
+                # stack (x, y) tuples
+                keypoints = np.stack((x, y), axis=0) 
+            
             poseflow = None
             frame_index_poseflow = frame_index
             if frame_index_poseflow > 0:
                 full_path = os.path.join(sample['path'].replace('mp4', 'kpflow2'),
                                          'flow_{:05d}.npy'.format(frame_index_poseflow))
                 while not os.path.isfile(full_path):  # WORKAROUND FOR MISSING FILES!!!
+                    # if poseflow file doesn't exist for that frame, get the poseflow from the previous frame
                     frame_index_poseflow -= 1
                     full_path = os.path.join(sample['path'].replace('mp4', 'kpflow2'),
                                              'flow_{:05d}.npy'.format(frame_index_poseflow))
@@ -134,12 +151,14 @@ class ChaLearnDataset(Dataset):
 
             frame = frames[frame_index]
 
+            # TODO: make these class constants or in a separate file
             left_wrist_index = 9
             left_elbow_index = 7
             right_wrist_index = 10
             right_elbow_index = 8
 
-            # Crop out both wrists and apply transform
+            # CROP out both wrists and apply transform
+            # -------------------- LEFT WRIST/ELBOW -------------------- # 
             left_wrist = keypoints[0:2, left_wrist_index]
             left_elbow = keypoints[0:2, left_elbow_index]
             left_hand_center = left_wrist + WRIST_DELTA * (left_wrist - left_elbow)
@@ -151,15 +170,20 @@ class ChaLearnDataset(Dataset):
             left_hand_ymin = max(0, int(left_hand_center_y - shoulder_dist // 2))
             left_hand_ymax = min(frame.size(0), int(left_hand_center_y + shoulder_dist // 2))
 
-            if not np.any(left_wrist) or not np.any(
-                    left_elbow) or left_hand_ymax - left_hand_ymin <= 0 or left_hand_xmax - left_hand_xmin <= 0:
+            # if wrist or elbow not found:
+            if not np.any(left_wrist) \
+                or not np.any(left_elbow) \
+                or left_hand_ymax - left_hand_ymin <= 0 \
+                or left_hand_xmax - left_hand_xmin <= 0:
                 # Wrist or elbow not found -> use entire frame then
                 left_hand_crop = frame
                 missing_wrists_left.append(len(clip) + 1)
-            else:
+            else: # wrist or elbow is found --> proceed with the cropping it
                 left_hand_crop = frame[left_hand_ymin:left_hand_ymax, left_hand_xmin:left_hand_xmax, :]
-            left_hand_crop = self.transform(left_hand_crop.numpy())
 
+            left_hand_crop = self.transform(left_hand_crop.numpy()) # apply transform on the crop
+
+            # -------------------- RIGHT WRIST/ELBOW -------------------- #
             right_wrist = keypoints[0:2, right_wrist_index]
             right_elbow = keypoints[0:2, right_elbow_index]
             right_hand_center = right_wrist + WRIST_DELTA * (right_wrist - right_elbow)
@@ -178,11 +202,12 @@ class ChaLearnDataset(Dataset):
             else:
                 right_hand_crop = frame[right_hand_ymin:right_hand_ymax, right_hand_xmin:right_hand_xmax, :]
             right_hand_crop = self.transform(right_hand_crop.numpy())
+            # -------------------- END WRIST/ELBOW CROPPING -------------------- #
 
             crops = torch.stack((left_hand_crop, right_hand_crop), dim=0)
-
             clip.append(crops)
 
+            # TODO: which poses am i deleting here??
             pose_transform = Compose(DeleteFlowKeypoints(list(range(65, 135))),
                                      DeleteFlowKeypoints(list(range(19, 25))),
                                      DeleteFlowKeypoints(list(range(11, 17))),
@@ -194,7 +219,8 @@ class ChaLearnDataset(Dataset):
         # Try to impute hand crops from frames where the elbow and wrist weren't missing as close as possible temporally
         for clip_index in range(len(clip)):
             if clip_index in missing_wrists_left:
-                # Find temporally closest not missing frame for left wrist
+                # Find temporally closest not missing frame for left wrist 
+                # TODO: understand this later ---> its in the paper
                 replacement_index = -1
                 distance = np.inf
                 for ci in range(len(clip)):
@@ -228,7 +254,7 @@ class ChaLearnDataset(Dataset):
             return (clip, poseflow_clip), sample['path'].split('/')[-1][:-10]
 
     def __len__(self):
-        return len(self.samples)
+        return len(self.samples) # returns number of videos
 
     def _collect_samples(self):
         return collect_samples(self.has_labels, self.root_path, self.job_path, self.sequence_length,
