@@ -1,3 +1,4 @@
+'''Computes PoseFlows from pose keypoint files'''
 import argparse
 import glob
 import json
@@ -7,7 +8,7 @@ from collections import defaultdict
 
 import numpy as np
 
-
+# reads the keypoint file 
 def read_pose(kp_file):
     with open(kp_file) as kf:
         value = json.loads(kf.read())
@@ -16,7 +17,7 @@ def read_pose(kp_file):
         y = kps[1::3]
         return np.stack((x, y), axis=1)
 
-
+# TODO: THE ACTUAL CALCULATION BASED ON PREVIOUS FRAME AND CURRENT FRAME
 def calc_pose_flow(prev, next):
     result = np.zeros_like(prev)
     for kpi in range(prev.shape[0]):
@@ -33,7 +34,7 @@ def calc_pose_flow(prev, next):
 
     return result
 
-
+# Pre-processing done before calculating pose flow
 def impute_missing_keypoints(poses):
     """Replace missing keypoints (on the origin) by values from neighbouring frames."""
     # 1. Collect missing keypoints
@@ -62,10 +63,12 @@ def impute_missing_keypoints(poses):
     # 3. We have imputed as many keypoints as possible with the closest non-missing temporal neighbours
     return poses
 
-
+# so that different distances of person from camera shouldn't affect 
 def normalize(poses):
     """Normalize each pose in the array to account for camera position. We normalize
     by dividing keypoints by a factor such that the length of the neck becomes 1."""
+    # TODO: openpose is 2D Keypoints, but MediaPipe has 3D keypoints. so maybe i can just
+    #       take into account the z coordinate, and not have to do this normalizing
     for i in range(poses.shape[0]):
         upper_neck = poses[i, 17]
         head_top = poses[i, 18]
@@ -79,6 +82,7 @@ def main(args):
     input_dirs = sorted(glob.glob(os.path.join(args.input_dir, '*', '*_color.kp')))
     input_dir_index = 0
     total = len(input_dirs)
+
     for input_dir in input_dirs:
         print(f'{input_dir_index}/{total}')
         input_dir_index += 1
@@ -103,7 +107,7 @@ def main(args):
         #     plt.show()
         # break
 
-        # 2. Compute pose flow
+        # 2. Compute pose flow on pre-processed keypoints
         prev = poses[0]
         for i in range(1, poses.shape[0]):
             next = poses[i]
