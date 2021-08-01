@@ -6,7 +6,6 @@ import os
 
 import torchvision
 
-
 def main(args):
     for dataset in ['train', 'val', 'test']:
         videos = glob.glob(os.path.join(args.input_dir, dataset, '*_color.mp4'))
